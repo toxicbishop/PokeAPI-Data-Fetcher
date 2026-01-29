@@ -3,9 +3,89 @@ import requests
 from PIL import Image, ImageTk
 import io
 import threading
+import re
 
 # --- API Configuration ---
 BASE_URL = "https://pokeapi.co/api/v2/pokemon/"
+
+# --- Input Validation ---
+class InputValidator:
+    """
+    Validates and sanitizes user input to prevent injection attacks.
+    This includes SQL injection, command injection, and path traversal.
+    """
+    
+    # Maximum allowed input length
+    MAX_INPUT_LENGTH = 50
+    
+    # Regex pattern for valid Pokemon names (alphanumeric, hyphens, spaces only)
+    VALID_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9\-\s]+$')
+    
+    # Dangerous patterns to block (SQL injection, command injection, etc.)
+    DANGEROUS_PATTERNS = [
+        r'[;\'\"\`]',           # SQL/command terminators and quotes
+        r'--',                   # SQL comment
+        r'/\*',                  # SQL block comment start
+        r'\*/',                  # SQL block comment end
+        r'\b(SELECT|INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|EXEC|UNION|OR|AND)\b',  # SQL keywords
+        r'[<>]',                 # XSS brackets
+        r'\.\.',                 # Path traversal
+        r'[/\\]',                # Path separators
+        r'[\x00-\x1f]',          # Control characters
+    ]
+    
+    @classmethod
+    def validate_pokemon_name(cls, name: str) -> tuple[bool, str, str]:
+        """
+        Validates and sanitizes a Pokemon name input.
+        
+        Args:
+            name: The raw user input
+            
+        Returns:
+            Tuple of (is_valid, sanitized_name, error_message)
+        """
+        # Check if input is empty
+        if not name or not name.strip():
+            return False, "", "Please enter a Pokémon name"
+        
+        # Strip whitespace and convert to lowercase
+        sanitized = name.strip().lower()
+        
+        # Check length
+        if len(sanitized) > cls.MAX_INPUT_LENGTH:
+            return False, "", f"Input too long (max {cls.MAX_INPUT_LENGTH} characters)"
+        
+        # Check for dangerous patterns
+        for pattern in cls.DANGEROUS_PATTERNS:
+            if re.search(pattern, name, re.IGNORECASE):
+                return False, "", "Invalid characters detected in input"
+        
+        # Check if name matches valid pattern
+        if not cls.VALID_NAME_PATTERN.match(sanitized):
+            return False, "", "Pokémon name can only contain letters, numbers, and hyphens"
+        
+        return True, sanitized, ""
+    
+    @classmethod
+    def is_safe_input(cls, user_input: str) -> bool:
+        """
+        Quick check if input is safe (no dangerous patterns).
+        
+        Args:
+            user_input: The raw user input
+            
+        Returns:
+            True if input appears safe, False otherwise
+        """
+        if not user_input:
+            return False
+            
+        for pattern in cls.DANGEROUS_PATTERNS:
+            if re.search(pattern, user_input, re.IGNORECASE):
+                return False
+        
+        return True
 
 class PokedexApp(ctk.CTk):
     def __init__(self):
@@ -99,15 +179,20 @@ class PokedexApp(ctk.CTk):
         self.ability_label.pack(fill="x")
 
     def search_pokemon(self):
-        name = self.search_entry.get().strip().lower()
-        if not name:
+        raw_name = self.search_entry.get()
+        
+        # Validate input to prevent injection attacks and malformed requests
+        is_valid, sanitized_name, error_message = InputValidator.validate_pokemon_name(raw_name)
+        
+        if not is_valid:
+            self.status_label.configure(text=error_message, text_color="#EF4444")
             return
 
         self.status_label.configure(text="Searching...", text_color="gray")
         self.search_button.configure(state="disabled")
         
         # Run in thread to keep GUI responsive
-        thread = threading.Thread(target=self.fetch_pokemon_data, args=(name,))
+        thread = threading.Thread(target=self.fetch_pokemon_data, args=(sanitized_name,))
         thread.start()
 
     def fetch_pokemon_data(self, name):
